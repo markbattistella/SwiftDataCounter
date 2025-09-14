@@ -9,7 +9,7 @@ import Foundation
 /// Errors thrown by ``EntityCounter`` during count operations.
 internal enum EntityCounterError: Error, LocalizedError {
 
-    /// The supplied model type does not conform to ``CountablePersistentModel`` and cannot be
+    /// The supplied model type does not conform to ``FetchablePersistentModel`` and cannot be
     /// counted.
     ///
     /// - Parameter typeName: The name of the unsupported type.
@@ -29,7 +29,7 @@ internal enum EntityCounterError: Error, LocalizedError {
     internal var failureReason: String? {
         switch self {
             case .unsupportedModelType:
-                return "The model does not conform to CountablePersistentModel."
+                return "The model does not conform to FetchablePersistentModel."
         }
     }
 
@@ -37,15 +37,7 @@ internal enum EntityCounterError: Error, LocalizedError {
     internal var recoverySuggestion: String? {
         switch self {
             case .unsupportedModelType:
-                return "Ensure that the model type conforms to CountablePersistentModel and implements fetchCount(in:)."
-        }
-    }
-
-    /// A localized string describing additional help.
-    internal var helpAnchor: String? {
-        switch self {
-            case .unsupportedModelType:
-                return "See EntityCounter and CountablePersistentModel documentation for implementation details."
+                return "Ensure that the model type conforms to FetchablePersistentModel and implements the FetchDescriptor."
         }
     }
 }
