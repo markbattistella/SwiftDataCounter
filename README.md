@@ -24,6 +24,9 @@
 
 By centralising count tracking and limit checks, you can keep app logic clean and consistent.
 
+> [!NOTE]
+> Tracked models must conform to `FetchablePersistentModel` and define a `fetchDescriptor` so that `EntityCounter` can query their counts.
+
 ## Features
 
 - **Live Counts**: Automatically refreshes when the `ModelContext` saves.
@@ -49,6 +52,17 @@ To add `SwiftDataCounter` to your project, use the Swift Package Manager:
 ## Usage
 
 ### Setup
+
+Tracked models must conform to `FetchablePersistentModel` and implement a static `fetchDescriptor`:
+
+```swift
+// Extend your existing model
+extension User: FetchablePersistentModel {
+    static var fetchDescriptor: FetchDescriptor<User> {
+        FetchDescriptor<User>()
+    }
+}
+```
 
 Track models with a **shared default limit**:
 
