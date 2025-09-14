@@ -13,7 +13,7 @@ import SwiftData
 ///
 /// You typically conform your model types to this protocol by implementing a simple `fetchCount`
 /// query using SwiftData.
-internal protocol CountablePersistentModel: PersistentModel {
+public protocol CountablePersistentModel: PersistentModel {
 
     /// Returns the number of instances of the model type in the given context.
     ///
