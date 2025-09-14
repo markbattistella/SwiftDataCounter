@@ -4,19 +4,21 @@
 // Website: https://markbattistella.com
 //
 
-import Foundation
 import SwiftData
 
-/// A `PersistentModel` that supports counting instances in a given `ModelContext`.
+/// A protocol that marks a `PersistentModel` type as countable by `EntityCounter`.
 ///
-/// Conforming types must implement a static method that returns the total number of persisted
-/// entities of that type in the specified context.
-public protocol CountablePersistentModel: PersistentModel {
+/// Conforming types must provide a static implementation of ``fetchCount(in:)`` to return the
+/// current number of stored instances in the given `ModelContext`.
+///
+/// You typically conform your model types to this protocol by implementing a simple `fetchCount`
+/// query using SwiftData.
+internal protocol CountablePersistentModel: PersistentModel {
 
-    /// Returns the total number of persisted instances of the model in the given context.
+    /// Returns the number of instances of the model type in the given context.
     ///
     /// - Parameter context: The `ModelContext` to query.
-    /// - Throws: An error if the fetch fails.
-    /// - Returns: The total count of persisted entities.
+    /// - Returns: The number of stored model instances in `context`.
+    /// - Throws: Any error thrown while fetching the count from the context.
     static func fetchCount(in context: ModelContext) throws -> Int
 }
