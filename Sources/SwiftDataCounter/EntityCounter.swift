@@ -164,6 +164,27 @@ extension EntityCounter {
         }
         return freeLimit
     }
+
+    /// Updates the entity limit for a specific persistent model type.
+    ///
+    /// Use this method to dynamically adjust the allowed entity count for a tracked model, such
+    /// as when user entitlements or app configuration changes. The method updates the internal
+    /// limit, logs the change, and triggers a refresh of all tracked counts.
+    ///
+    /// - Parameters:
+    ///   - newLimit: The new maximum number of entities permitted for the specified model type.
+    ///     Pass `nil` to remove the limit and treat the model as unlimited.
+    ///   - modelType: The persistent model type whose limit should be updated.
+    ///
+    /// - Note: If the model type is not currently being tracked, this call has no effect.
+    public func updateLimit<T: PersistentModel>(_ newLimit: Int?, for modelType: T.Type) {
+        let key = ObjectIdentifier(modelType)
+        guard var current = totals[key] else { return }
+        current.freeLimit = newLimit
+        totals[key] = current
+        logger.info("\(modelType, privacy: .public) limit updated to \(newLimit?.description ?? "unlimited")")
+        refresh()
+    }
 }
 
 extension EntityCounter {
