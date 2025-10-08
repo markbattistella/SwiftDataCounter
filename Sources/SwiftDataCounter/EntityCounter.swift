@@ -201,6 +201,7 @@ extension EntityCounter {
     public func updateLimit<T: PersistentModel>(_ newLimit: Int?, for modelType: T.Type) {
         let key = ObjectIdentifier(modelType)
         guard var current = totals[key] else { return }
+        guard current.freeLimit != newLimit else { return }
         current.freeLimit = newLimit
         totals[key] = current
         logger.info("\(modelType, privacy: .public) limit updated to \(newLimit?.description ?? "unlimited")")
