@@ -5,6 +5,7 @@
 //
 
 import Foundation
+import Observation
 import SwiftData
 import SimpleLogger
 
@@ -34,7 +35,10 @@ public final class EntityCounter {
     
     /// The `ModelContext` used for fetching counts and observing changes.
     private var context: ModelContext?
-    
+
+    /// A Boolean value indicating whether the entity counts have completed their initial load.
+    private(set) var isLoaded = false
+
     // MARK: - Init
     
     /// Creates a counter for the given models with no default limit.
@@ -86,11 +90,30 @@ public final class EntityCounter {
             }
             totals[ObjectIdentifier(modelType)] = Count(count: 0, freeLimit: limit)
         }
-        
-        Task { [weak self] in
-            await self?.observeContextSaves()
+    }
+
+    /// Begins observing the associated `ModelContext` for save notifications and performs the
+    /// initial count refresh.
+    ///
+    /// Call this method once after creating the `EntityCounter` instance. It runs an initial
+    /// `refresh()` to populate counts, sets the `isLoaded` flag to `true`, and then continues
+    /// monitoring the context for changes.
+    ///
+    /// This method suspends indefinitely while listening for `ModelContext.didSave` notifications,
+    /// refreshing counts each time the context is saved.
+    public func startTracking() async {
+        guard !isLoaded else {
+            logger.debug("EntityCounter already tracking — skipping new observer registration")
+            return
         }
+
+        logger.info("EntityCounter starting tracking for \(self.models.count, privacy: .public) models")
+
+        await observeContextSaves()
         refresh()
+
+        isLoaded = true
+        logger.info("EntityCounter initial refresh complete. isLoaded = true")
     }
 }
 
@@ -238,22 +261,28 @@ extension EntityCounter {
     
     /// Refreshes entity counts for all tracked models.
     private func refresh() {
-        guard let context else { return }
-        
+        guard let context else {
+            logger.error("Refresh called before context was set")
+            return
+        }
+
+        logger.debug("Refreshing entity counts for \(self.models.count, privacy: .public) models")
+        var totalUpdated = 0
+
         for (modelType, limit) in models {
             do {
                 let newCount = try fetchCount(for: modelType, in: context)
                 let key = ObjectIdentifier(modelType)
                 let oldCount = totals[key]?.count
-                
-                logChanges(for: modelType, oldCount: oldCount, newCount: newCount, freeLimit: limit)
-                
                 totals[key] = Count(count: newCount, freeLimit: limit)
-                
+                totalUpdated += 1
+                logChanges(for: modelType, oldCount: oldCount, newCount: newCount, freeLimit: limit)
             } catch {
-                logger.error("Failed to fetch \(String(describing: modelType)) count: \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to fetch count for \(String(describing: modelType)): \(error.localizedDescription, privacy: .public)")
             }
         }
+
+        logger.debug("Refresh complete — \(totalUpdated, privacy: .public) models updated, grandCount = \(self.grandCount, privacy: .public)")
     }
     
     /// Logs changes in count and limit status for a given model type.
@@ -270,17 +299,16 @@ extension EntityCounter {
         freeLimit: Int?
     ) {
         if oldCount != newCount {
-            if let oldCount {
-                logger.info("\(String(describing: modelType)) count changed from \(oldCount, privacy: .public) to \(newCount, privacy: .public)")
-            } else {
-                logger.info("\(String(describing: modelType)) count initialised at \(newCount, privacy: .public)")
-            }
+            let delta = (oldCount == nil) ? newCount : newCount - (oldCount ?? 0)
+            logger.info(
+                "\(String(describing: modelType)) count updated from \(oldCount ?? 0, privacy: .public) → \(newCount, privacy: .public) (Δ \(delta, privacy: .public))"
+            )
         }
-        
+
         if let freeLimit {
             let oldOver = (oldCount ?? 0) > freeLimit
             let newOver = newCount > freeLimit
-            
+
             if !oldOver, newOver {
                 logger.warning("\(String(describing: modelType)) exceeded limit \(freeLimit, privacy: .public). Current count: \(newCount, privacy: .public)")
             } else if oldOver, !newOver {
@@ -325,9 +353,16 @@ extension EntityCounter {
     
     /// Observes save notifications on the model context and refreshes counts when changes occur.
     private func observeContextSaves() async {
-        guard let context else { return }
+        guard let context else {
+            logger.error("observeContextSaves() called with nil context")
+            return
+        }
+
+        logger.debug("Observing ModelContext.didSave notifications for \(String(describing: context))")
+
         for await note in NotificationCenter.default.notifications(named: ModelContext.didSave) {
             guard let obj = note.object as? ModelContext, obj === context else { continue }
+            logger.debug("ModelContext.didSave detected — refreshing entity counts")
             self.refresh()
         }
     }
