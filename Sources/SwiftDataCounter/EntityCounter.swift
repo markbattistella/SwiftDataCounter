@@ -20,27 +20,27 @@ public typealias PersistentModelLimit = (type: any FetchablePersistentModel.Type
 @MainActor
 @Observable
 public final class EntityCounter {
-    
+
     /// Logger configured for SwiftData operations.
     private let logger = SimpleLogger(category: .swiftData)
-    
+
     /// Map of tracked model identifiers to their current count and limit data.
     private(set) var totals: [ObjectIdentifier: Count] = [:]
-    
+
     /// The list of tracked models and their optional per-model limits.
     private let models: [PersistentModelLimit]
-    
+
     /// The default limit applied when a model does not specify one.
     private let defaultLimit: Int?
-    
+
     /// The `ModelContext` used for fetching counts and observing changes.
     private var context: ModelContext?
 
     /// A Boolean value indicating whether the entity counts have completed their initial load.
-    private(set) var isLoaded = false
+    public private(set) var isLoaded = false
 
     // MARK: - Init
-    
+
     /// Creates a counter for the given models with no default limit.
     ///
     /// - Parameters:
@@ -49,7 +49,7 @@ public final class EntityCounter {
     public convenience init(context: ModelContext?, for models: PersistentModelLimit...) {
         self.init(context: context, for: models, default: nil)
     }
-    
+
     /// Creates a counter for the given models with a shared default limit.
     ///
     /// - Parameters:
@@ -64,7 +64,7 @@ public final class EntityCounter {
         let mapped = models.map { (type: $0, limit: defaultLimit) }
         self.init(context: context, for: mapped, default: defaultLimit)
     }
-    
+
     /// Creates a counter with explicit model/limit pairs.
     ///
     /// - Parameters:
@@ -75,21 +75,19 @@ public final class EntityCounter {
         self.context = context
         self.models = models
         self.defaultLimit = limit
-        
-        if let limit {
-            logger.info("EntityCounter initialised. Tracking \(models.count, privacy: .public) models, defaultLimit = \(limit, privacy: .public)")
-        } else {
-            logger.info("EntityCounter initialised. Tracking \(models.count, privacy: .public) models")
-        }
-        
+
+        let cachedCounts = UserDefaults.standard.dictionary(forKey: "EntityCounter_LastCounts") as? [String: Int] ?? [:]
+        let cachedLimits = UserDefaults.standard.dictionary(forKey: "EntityCounter_LastLimits") as? [String: Int] ?? [:]
+
         for (modelType, limit) in models {
-            if let limit {
-                logger.info("Tracking \(String(describing: modelType)) with limit \(limit, privacy: .public)")
-            } else {
-                logger.info("Tracking \(String(describing: modelType)) with no limit")
-            }
-            totals[ObjectIdentifier(modelType)] = Count(count: 0, freeLimit: limit)
+            let name = String(describing: modelType)
+            let cachedCount = cachedCounts[name] ?? 0
+            let cachedLimit = cachedLimits[name] ?? limit
+            totals[ObjectIdentifier(modelType)] = Count(count: cachedCount, freeLimit: cachedLimit)
+            logger.debug("Loaded cached \(name) count=\(cachedCount), limit=\(cachedLimit ?? -1)")
         }
+
+        logger.info("EntityCounter initialised. Cached counts loaded.")
     }
 
     /// Begins observing the associated `ModelContext` for save notifications and performs the
@@ -118,30 +116,30 @@ public final class EntityCounter {
 }
 
 extension EntityCounter {
-    
+
     /// Holds the current count and optional limit for a tracked model.
     public struct Count {
-        
+
         /// The current number of entities.
         public var count: Int
-        
+
         /// The optional maximum allowed count.
         public var freeLimit: Int?
     }
-    
+
     /// Defines how combined limits are calculated.
     public enum LimitScope {
-        
+
         /// Include all models, even unlimited ones.
         case all
-        
+
         /// Exclude unlimited models from combined limit calculations.
         case excludingUnlimited
     }
 }
 
 extension EntityCounter {
-    
+
     /// Returns the current count for a given model type.
     ///
     /// - Parameter modelType: The model type to query.
@@ -149,7 +147,7 @@ extension EntityCounter {
     public func count<T: PersistentModel>(for modelType: T.Type) -> Int {
         totals[ObjectIdentifier(modelType)]?.count ?? 0
     }
-    
+
     /// Returns the remaining capacity before reaching the model's limit.
     ///
     /// - Parameter modelType: The model type to query.
@@ -163,7 +161,7 @@ extension EntityCounter {
         }
         return max(freeLimit - mc.count, 0)
     }
-    
+
     /// Returns whether the model type currently exceeds its limit.
     ///
     /// - Parameter modelType: The model type to query.
@@ -173,7 +171,7 @@ extension EntityCounter {
         guard let freeLimit = mc.freeLimit else { return false }
         return mc.count > freeLimit
     }
-    
+
     /// Returns the limit for the given model type.
     ///
     /// - Parameter modelType: The model type to query.
@@ -211,17 +209,17 @@ extension EntityCounter {
 }
 
 extension EntityCounter {
-    
+
     /// Returns the default count object using the global default limit.
     private func defaultModelCount() -> Count {
         Count(count: 0, freeLimit: defaultLimit)
     }
-    
+
     /// Returns the total entity count across all tracked models.
     public var grandCount: Int {
         totals.values.reduce(0) { $0 + $1.count }
     }
-    
+
     /// Returns the combined limit across tracked models.
     ///
     /// - Parameter scope: Whether to include unlimited models.
@@ -233,12 +231,12 @@ extension EntityCounter {
                     return nil
                 }
                 return totals.values.compactMap { $0.freeLimit }.reduce(0, +)
-                
+
             case .excludingUnlimited:
                 return totals.values.compactMap { $0.freeLimit }.reduce(0, +)
         }
     }
-    
+
     /// Returns the combined remaining capacity across tracked models.
     ///
     /// - Parameter scope: Whether to include unlimited models.
@@ -247,7 +245,7 @@ extension EntityCounter {
         guard let limit = combinedLimit(scope: scope) else { return nil }
         return max(limit - grandCount, 0)
     }
-    
+
     /// Returns `true` if any tracked model exceeds its limit.
     public var isOverAnyLimit: Bool {
         totals.values.contains {
@@ -258,7 +256,7 @@ extension EntityCounter {
 }
 
 extension EntityCounter {
-    
+
     /// Refreshes entity counts for all tracked models.
     private func refresh() {
         guard let context else {
@@ -266,25 +264,37 @@ extension EntityCounter {
             return
         }
 
+        var countSnapshot: [String: Int] = [:]
+        var limitSnapshot: [String: Int] = [:]
+
         logger.debug("Refreshing entity counts for \(self.models.count, privacy: .public) models")
-        var totalUpdated = 0
 
         for (modelType, limit) in models {
             do {
                 let newCount = try fetchCount(for: modelType, in: context)
                 let key = ObjectIdentifier(modelType)
                 let oldCount = totals[key]?.count
-                totals[key] = Count(count: newCount, freeLimit: limit)
-                totalUpdated += 1
+
                 logChanges(for: modelType, oldCount: oldCount, newCount: newCount, freeLimit: limit)
+                totals[key] = Count(count: newCount, freeLimit: limit)
+
+                countSnapshot[String(describing: modelType)] = newCount
+                if let limit { limitSnapshot[String(describing: modelType)] = limit }
             } catch {
-                logger.error("Failed to fetch count for \(String(describing: modelType)): \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to fetch \(String(describing: modelType)) count: \(error.localizedDescription, privacy: .public)")
             }
         }
 
-        logger.debug("Refresh complete — \(totalUpdated, privacy: .public) models updated, grandCount = \(self.grandCount, privacy: .public)")
+        UserDefaults.standard.set(countSnapshot, forKey: "EntityCounter_LastCounts")
+        UserDefaults.standard.set(limitSnapshot, forKey: "EntityCounter_LastLimits")
+        logger.debug("Cached counts: \(countSnapshot), limits: \(limitSnapshot)")
+
+        if !isLoaded {
+            logger.notice("EntityCounter switching from cached to live data.")
+        }
+        isLoaded = true
     }
-    
+
     /// Logs changes in count and limit status for a given model type.
     ///
     /// - Parameters:
@@ -316,7 +326,7 @@ extension EntityCounter {
             }
         }
     }
-    
+
     /// Fetches the current count for a given model type.
     ///
     /// - Parameters:
@@ -331,9 +341,9 @@ extension EntityCounter {
         do {
             return try context.fetchCount(modelType.fetchDescriptor)
         } catch let error as EntityCounterError {
-            
+
             let modelTypeDescription = String(describing: modelType)
-            
+
             if let description = error.errorDescription {
                 logger.error("EntityCounterError: \(description, privacy: .public)")
             }
@@ -343,14 +353,14 @@ extension EntityCounter {
             if let suggestion = error.recoverySuggestion {
                 logger.log("Recovery suggestion: \(suggestion, privacy: .public)")
             }
-            
+
             throw EntityCounterError.unsupportedModelType(modelTypeDescription)
         } catch {
             logger.error("Unexpected error: \(error.localizedDescription, privacy: .public)")
             throw error
         }
     }
-    
+
     /// Observes save notifications on the model context and refreshes counts when changes occur.
     private func observeContextSaves() async {
         guard let context else {
