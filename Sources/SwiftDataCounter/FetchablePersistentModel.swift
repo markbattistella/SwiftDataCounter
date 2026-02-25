@@ -20,5 +20,14 @@ public protocol FetchablePersistentModel: PersistentModel {
     ///
     /// This descriptor defines the criteria used when fetching from the underlying persistence
     /// layer, such as sorting or filtering rules.
+    ///
+    /// A default implementation is provided that fetches all records with no filter or sort.
+    /// Override this only when you need custom filtering or sorting behaviour.
     static var fetchDescriptor: FetchDescriptor<Self> { get }
+}
+
+public extension FetchablePersistentModel {
+
+    /// Returns a `FetchDescriptor` that fetches all records of this model with no filter or sort.
+    static var fetchDescriptor: FetchDescriptor<Self> { FetchDescriptor() }
 }

@@ -26,6 +26,11 @@ let package = Package(
             name: "SwiftDataCounter",
             dependencies: ["SimpleLogger"],
             swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]
+        ),
+        .testTarget(
+            name: "SwiftDataCounterTests",
+            dependencies: ["SwiftDataCounter"],
+            path: "Tests/SwiftDataCounterTests"
         )
     ]
 )
