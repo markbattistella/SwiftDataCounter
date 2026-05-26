@@ -7,7 +7,7 @@
 
 [![OS Platforms][Shield2]](https://swiftpackageindex.com/markbattistella/SwiftDataCounter)
 
-[![Licence][Shield3]](https://github.com/markbattistella/SwiftDataCounter/blob/main/LICENSE)
+[![Licence][Shield3]](https://github.com/markbattistella/SwiftDataCounter/blob/main/LICENCE)
 
 </div>
 
@@ -37,7 +37,18 @@ By centralising count tracking and limit checks, you can keep app logic clean an
 
 ### Swift Package Manager
 
-To add `SwiftDataCounter` to your project, use the Swift Package Manager:
+Add `SwiftDataCounter` using Swift Package Manager:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/markbattistella/SwiftDataCounter",
+        from: "26.3.8"
+    )
+]
+```
+
+Alternatively, add it in Xcode:
 
 1. Open your project in Xcode.
 1. Go to `File > Add Packages`.
@@ -48,6 +59,16 @@ To add `SwiftDataCounter` to your project, use the Swift Package Manager:
     ```
 
 1. Click **Add Package**.
+
+## Requirements
+
+- Swift 6.0+
+- iOS 17.0+
+- macOS 14.0+
+- Mac Catalyst 17.0+
+- tvOS 17.0+
+- watchOS 10.0+
+- visionOS 1.0+
 
 ## Usage
 
@@ -95,7 +116,7 @@ let remainingUsers = counter.remaining(for: User.self)
 // eg. 4 (10 limit - 6 used)
 
 let userLimit = counter.limit(for: Post.self)
-// preconditionFailure since Post is set to unlimited (nil)
+// nil when Post is set to unlimited
 
 if counter.isOverLimit(for: User.self) {
     print("User count is over the limit!")
@@ -128,8 +149,8 @@ For cleaner code, extend `EntityCounter` with typed accessors:
 ```swift
 extension EntityCounter {
     var userCount: Int { count(for: User.self) }
-    var userRemaining: Int { remaining(for: User.self) }
-    var userLimit: Int { limit(for: User.self) }
+    var userRemaining: Int? { remaining(for: User.self) }
+    var userLimit: Int? { limit(for: User.self) }
     var isUserOverLimit: Bool { isOverLimit(for: User.self) }
 }
 ```
@@ -165,11 +186,11 @@ User exceeded limit 10. Current count: 11
 ## Warnings
 
 > [!WARNING]  
-> The API is **strict**:
+> Limited and unlimited models have different capacity semantics:
 >
-> - Calling `remaining(for:)` or `limit(for:)` on a model configured with `nil` (unlimited) will cause a **runtime crash** via `preconditionFailure`.  
-> - This is intentional to surface incorrect usage early - if a model is unlimited, you should not be asking for its remaining capacity or limit.  
-> - Always design your code so that only limited models are passed to these methods.  
+> - `remaining(for:)` and `limit(for:)` return `nil` for unlimited models.
+> - `isOverLimit(for:)` always returns `false` for unlimited models.
+> - Treat `nil` as "no limit" rather than as zero remaining capacity.
 
 ## Licence
 

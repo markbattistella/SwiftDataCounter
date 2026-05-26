@@ -4,266 +4,313 @@
 // Website: https://markbattistella.com
 //
 
-import XCTest
+import Foundation
 import SwiftData
+import Testing
+
 @testable import SwiftDataCounter
 
 // MARK: - Test models
 
 @Model
 final class Item: FetchablePersistentModel {
-    var name: String
-    init(name: String) { self.name = name }
+  var name: String
+
+  init(name: String) {
+    self.name = name
+  }
 }
 
 @Model
 final class Tag: FetchablePersistentModel {
-    var label: String
-    init(label: String) { self.label = label }
+  var label: String
+
+  init(label: String) {
+    self.label = label
+  }
 }
 
 // MARK: - Tests
 
+@Suite("EntityCounter", .serialized)
 @MainActor
-final class EntityCounterTests: XCTestCase {
+struct EntityCounterTests {
 
-    // MARK: - Helpers
+  // MARK: - Helpers
 
-    func makeContainer(_ types: any PersistentModel.Type...) throws -> ModelContainer {
-        try ModelContainer(
-            for: Schema(types),
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-        )
+  func makeContainer(_ types: any PersistentModel.Type...) throws -> ModelContainer {
+    try ModelContainer(
+      for: Schema(types),
+      configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+    )
+  }
+
+  func waitForLoaded(_ counter: EntityCounter) async -> Bool {
+    await wait {
+      counter.isLoaded
+    }
+  }
+
+  func waitForCount<T: PersistentModel>(
+    _ counter: EntityCounter,
+    for modelType: T.Type,
+    equals expectedCount: Int
+  ) async -> Bool {
+    await wait {
+      counter.count(for: modelType) == expectedCount
+    }
+  }
+
+  func wait(until condition: () -> Bool) async -> Bool {
+    let deadline = Date.now.addingTimeInterval(2)
+
+    while Date.now < deadline {
+      if condition() {
+        return true
+      }
+
+      try? await Task.sleep(for: .milliseconds(10))
     }
 
-    /// Polls until `counter.isLoaded` is true or a 2-second timeout is reached.
-    func waitForLoaded(_ counter: EntityCounter) async {
-        let deadline = Date.now.addingTimeInterval(2)
-        while !counter.isLoaded, Date.now < deadline {
-            await Task.yield()
-        }
+    return condition()
+  }
+
+  // MARK: - Tests
+
+  @Test("Initial count loads")
+  func initialCountLoads() async throws {
+    let container = try makeContainer(Item.self)
+    let context = container.mainContext
+
+    context.insert(Item(name: "First"))
+    try context.save()
+
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: 10)
+    )
+    defer { counter.stopTracking() }
+
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+    #expect(counter.count(for: Item.self) == 1)
+  }
+
+  @Test("Count updates on save")
+  func countUpdatesOnSave() async throws {
+    let container = try makeContainer(Item.self)
+    let context = container.mainContext
+
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: 10)
+    )
+    defer { counter.stopTracking() }
+
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+    #expect(counter.count(for: Item.self) == 0)
+
+    context.insert(Item(name: "Alpha"))
+    context.insert(Item(name: "Beta"))
+    try context.save()
+
+    #expect(await waitForCount(counter, for: Item.self, equals: 2))
+  }
+
+  @Test("updateLimit survives subsequent saves")
+  func updateLimitSurvivesRefresh() async throws {
+    let container = try makeContainer(Item.self)
+    let context = container.mainContext
+
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: 5)
+    )
+    defer { counter.stopTracking() }
+
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+
+    counter.updateLimit(20, for: Item.self)
+    #expect(counter.limit(for: Item.self) == 20)
+
+    context.insert(Item(name: "Trigger"))
+    try context.save()
+
+    #expect(await waitForCount(counter, for: Item.self, equals: 1))
+    #expect(counter.limit(for: Item.self) == 20)
+  }
+
+  @Test("updateLimit nil remains unlimited after refresh")
+  func updateLimitNilRemainsUnlimitedAfterRefresh() async throws {
+    let container = try makeContainer(Item.self)
+    let context = container.mainContext
+
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: 5)
+    )
+    defer { counter.stopTracking() }
+
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+
+    counter.updateLimit(nil, for: Item.self)
+    #expect(counter.limit(for: Item.self) == nil)
+    #expect(counter.remaining(for: Item.self) == nil)
+
+    context.insert(Item(name: "Trigger"))
+    try context.save()
+
+    #expect(await waitForCount(counter, for: Item.self, equals: 1))
+    #expect(counter.limit(for: Item.self) == nil)
+    #expect(counter.remaining(for: Item.self) == nil)
+    #expect(!counter.isOverLimit(for: Item.self))
+  }
+
+  @Test("Unlimited model returns nil limit and remaining values")
+  func unlimitedModelReturnsNil() async throws {
+    let container = try makeContainer(Item.self)
+    let context = container.mainContext
+
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: nil)
+    )
+    defer { counter.stopTracking() }
+
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+    #expect(counter.limit(for: Item.self) == nil)
+    #expect(counter.remaining(for: Item.self) == nil)
+    #expect(!counter.isOverLimit(for: Item.self))
+  }
+
+  @Test("Limited model remaining value is calculated from count and limit")
+  func limitedModelRemaining() async throws {
+    let container = try makeContainer(Item.self)
+    let context = container.mainContext
+
+    for index in 0..<3 {
+      context.insert(Item(name: "I\(index)"))
+    }
+    try context.save()
+
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: 10)
+    )
+    defer { counter.stopTracking() }
+
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+    #expect(counter.remaining(for: Item.self) == 7)
+  }
+
+  @Test("Over-limit state is reported")
+  func isOverLimit() async throws {
+    let container = try makeContainer(Item.self)
+    let context = container.mainContext
+
+    for index in 0..<11 {
+      context.insert(Item(name: "I\(index)"))
+    }
+    try context.save()
+
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: 10)
+    )
+    defer { counter.stopTracking() }
+
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+    #expect(counter.isOverLimit(for: Item.self))
+    #expect(counter.isOverAnyLimit)
+  }
+
+  @Test("Cache key isolation between model sets")
+  func cacheKeyIsolation() async throws {
+    let containerA = try makeContainer(Item.self)
+    let containerB = try makeContainer(Tag.self)
+
+    let counterA = EntityCounter(
+      context: containerA.mainContext,
+      for: (type: Item.self, limit: 5)
+    )
+    let counterB = EntityCounter(
+      context: containerB.mainContext,
+      for: (type: Tag.self, limit: 10)
+    )
+    defer {
+      counterA.stopTracking()
+      counterB.stopTracking()
     }
 
-    /// Gives the save-notification handler a chance to run its refresh cycle.
-    func yieldForRefresh() async {
-        // Two yields: one to allow the notification to deliver, one for the refresh Task step.
-        await Task.yield()
-        await Task.yield()
+    #expect(await waitForLoaded(counterA), "Item counter should complete its initial refresh")
+    #expect(await waitForLoaded(counterB), "Tag counter should complete its initial refresh")
+
+    #expect(counterA.limit(for: Item.self) == 5)
+    #expect(counterB.limit(for: Tag.self) == 10)
+
+    counterA.updateLimit(99, for: Item.self)
+
+    #expect(counterB.limit(for: Tag.self) == 10)
+  }
+
+  @Test("Combined remaining excluding unlimited models uses only limited model counts")
+  func combinedRemainingExcludingUnlimited() async throws {
+    let container = try makeContainer(Item.self, Tag.self)
+    let context = container.mainContext
+
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: 10), (type: Tag.self, limit: nil)
+    )
+    defer { counter.stopTracking() }
+
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+
+    for index in 0..<3 {
+      context.insert(Item(name: "I\(index)"))
     }
-
-    // MARK: - Test 1: Initial count loads
-
-    func testInitialCountLoads() async throws {
-        let container = try makeContainer(Item.self)
-        let context = container.mainContext
-
-        context.insert(Item(name: "First"))
-        try context.save()
-
-        let counter = EntityCounter(
-            context: context,
-            for: (type: Item.self, limit: 10)
-        )
-
-        await waitForLoaded(counter)
-
-        XCTAssertTrue(counter.isLoaded, "Counter should report isLoaded = true after initial refresh")
-        XCTAssertEqual(counter.count(for: Item.self), 1)
+    for index in 0..<5 {
+      context.insert(Tag(label: "T\(index)"))
     }
+    try context.save()
 
-    // MARK: - Test 2: Count updates on save
+    #expect(await waitForCount(counter, for: Item.self, equals: 3))
+    #expect(counter.grandCount == 8)
+    #expect(counter.combinedLimit(scope: .excludingUnlimited) == 10)
+    #expect(counter.combinedRemaining(scope: .excludingUnlimited) == 7)
+  }
 
-    func testCountUpdatesOnSave() async throws {
-        let container = try makeContainer(Item.self)
-        let context = container.mainContext
+  @Test("Nil context completes loading with cached counts")
+  func nilContextCompletesLoadingWithCachedCounts() async {
+    let counter = EntityCounter(
+      context: nil,
+      for: (type: Item.self, limit: 10)
+    )
+    defer { counter.stopTracking() }
 
-        let counter = EntityCounter(
-            context: context,
-            for: (type: Item.self, limit: 10)
-        )
+    #expect(
+      await waitForLoaded(counter), "Nil context should not leave loading state pending forever")
+  }
 
-        await waitForLoaded(counter)
-        XCTAssertEqual(counter.count(for: Item.self), 0)
+  @Test("stopTracking prevents further refresh")
+  func stopTrackingPreventsRefresh() async throws {
+    let container = try makeContainer(Item.self)
+    let context = container.mainContext
 
-        context.insert(Item(name: "Alpha"))
-        context.insert(Item(name: "Beta"))
-        try context.save()
+    let counter = EntityCounter(
+      context: context,
+      for: (type: Item.self, limit: 10)
+    )
 
-        await yieldForRefresh()
+    #expect(await waitForLoaded(counter), "Counter should complete its initial refresh")
+    #expect(counter.count(for: Item.self) == 0)
 
-        XCTAssertEqual(counter.count(for: Item.self), 2)
-    }
+    counter.stopTracking()
 
-    // MARK: - Test 3: updateLimit survives subsequent saves
+    context.insert(Item(name: "After stop"))
+    try context.save()
 
-    func testUpdateLimitSurvivesRefresh() async throws {
-        let container = try makeContainer(Item.self)
-        let context = container.mainContext
+    try? await Task.sleep(for: .milliseconds(50))
 
-        let counter = EntityCounter(
-            context: context,
-            for: (type: Item.self, limit: 5)
-        )
-
-        await waitForLoaded(counter)
-
-        counter.updateLimit(20, for: Item.self)
-        XCTAssertEqual(counter.limit(for: Item.self), 20)
-
-        // Trigger a save-based refresh
-        context.insert(Item(name: "Trigger"))
-        try context.save()
-
-        await yieldForRefresh()
-
-        // The limit must still be 20, not 5 (the original config value)
-        XCTAssertEqual(
-            counter.limit(for: Item.self),
-            20,
-            "updateLimit() override must survive a save-triggered refresh"
-        )
-    }
-
-    // MARK: - Test 4: Unlimited model returns nil
-
-    func testUnlimitedModelReturnsNil() async throws {
-        let container = try makeContainer(Item.self)
-        let context = container.mainContext
-
-        let counter = EntityCounter(
-            context: context,
-            for: (type: Item.self, limit: nil)
-        )
-
-        await waitForLoaded(counter)
-
-        XCTAssertNil(counter.limit(for: Item.self))
-        XCTAssertNil(counter.remaining(for: Item.self))
-        XCTAssertFalse(counter.isOverLimit(for: Item.self))
-    }
-
-    // MARK: - Test 5: remaining calculation for a limited model
-
-    func testLimitedModelRemaining() async throws {
-        let container = try makeContainer(Item.self)
-        let context = container.mainContext
-
-        for i in 0..<3 { context.insert(Item(name: "I\(i)")) }
-        try context.save()
-
-        let counter = EntityCounter(
-            context: context,
-            for: (type: Item.self, limit: 10)
-        )
-
-        await waitForLoaded(counter)
-
-        XCTAssertEqual(counter.remaining(for: Item.self), 7)
-    }
-
-    // MARK: - Test 6: isOverLimit
-
-    func testIsOverLimit() async throws {
-        let container = try makeContainer(Item.self)
-        let context = container.mainContext
-
-        for i in 0..<11 { context.insert(Item(name: "I\(i)")) }
-        try context.save()
-
-        let counter = EntityCounter(
-            context: context,
-            for: (type: Item.self, limit: 10)
-        )
-
-        await waitForLoaded(counter)
-
-        XCTAssertTrue(counter.isOverLimit(for: Item.self))
-        XCTAssertTrue(counter.isOverAnyLimit)
-    }
-
-    // MARK: - Test 7: Cache key isolation between instances
-
-    func testCacheKeyIsolation() async throws {
-        let containerA = try makeContainer(Item.self)
-        let containerB = try makeContainer(Tag.self)
-
-        let counterA = EntityCounter(
-            context: containerA.mainContext,
-            for: (type: Item.self, limit: 5)
-        )
-        let counterB = EntityCounter(
-            context: containerB.mainContext,
-            for: (type: Tag.self, limit: 10)
-        )
-
-        await waitForLoaded(counterA)
-        await waitForLoaded(counterB)
-
-        XCTAssertEqual(counterA.limit(for: Item.self), 5)
-        XCTAssertEqual(counterB.limit(for: Tag.self), 10)
-
-        counterA.updateLimit(99, for: Item.self)
-
-        // counterB's limit must be unaffected
-        XCTAssertEqual(counterB.limit(for: Tag.self), 10)
-    }
-
-    // MARK: - Test 8: combinedRemaining excludingUnlimited uses only limited-model counts
-
-    func testCombinedRemainingExcludingUnlimited() async throws {
-        let container = try makeContainer(Item.self, Tag.self)
-        let context = container.mainContext
-
-        let counter = EntityCounter(
-            context: context,
-            for: (type: Item.self, limit: 10), (type: Tag.self, limit: nil)
-        )
-
-        await waitForLoaded(counter)
-
-        for i in 0..<3 { context.insert(Item(name: "I\(i)")) }
-        for i in 0..<5 { context.insert(Tag(label: "T\(i)")) }
-        try context.save()
-
-        await yieldForRefresh()
-
-        // grandCount = 8 (3 Items + 5 Tags)
-        XCTAssertEqual(counter.grandCount, 8)
-
-        // combinedLimit excludingUnlimited = 10 (Item only; Tag is nil)
-        XCTAssertEqual(counter.combinedLimit(scope: .excludingUnlimited), 10)
-
-        // combinedRemaining excludingUnlimited = 10 - 3 (Items only) = 7
-        // Must NOT subtract grandCount (8), which would give the wrong answer (2).
-        XCTAssertEqual(counter.combinedRemaining(scope: .excludingUnlimited), 7)
-    }
-
-    // MARK: - Test 9: stopTracking prevents further refresh
-
-    func testStopTrackingPreventsRefresh() async throws {
-        let container = try makeContainer(Item.self)
-        let context = container.mainContext
-
-        let counter = EntityCounter(
-            context: context,
-            for: (type: Item.self, limit: 10)
-        )
-
-        await waitForLoaded(counter)
-        XCTAssertEqual(counter.count(for: Item.self), 0)
-
-        counter.stopTracking()
-
-        context.insert(Item(name: "After stop"))
-        try context.save()
-
-        await yieldForRefresh()
-
-        // Count must still be 0 — tracking was stopped before the save
-        XCTAssertEqual(
-            counter.count(for: Item.self),
-            0,
-            "stopTracking() must prevent count updates from subsequent saves"
-        )
-    }
+    #expect(counter.count(for: Item.self) == 0)
+  }
 }
